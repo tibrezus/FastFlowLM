@@ -8,6 +8,11 @@ XDNA 1 compatibility" would and would not entail. It exists so that other Ryzen-
 (XDNA 1) owners stop chasing a dead end, and so future contributors know where the real
 boundary is.
 
+> **Important nuance (added after further investigation):** the LLM verdict in this
+> document applies to *LLM runtimes* (FastFlowLM, Lemonade). Smaller models —
+> BERT/MiniLM/E5-class embeddings and CNNs — are a different, more positive story:
+> the AMD VitisAI runtime **does** support Phoenix for those. See §7.
+
 ---
 
 ## TL;DR
@@ -134,3 +139,38 @@ overlay is available — but not for FastFlowLM-style LLMs.
 - AMD Ryzen AI Software 1.7.1 release notes (lists Phoenix as supported for the *CNN/transformer
   ONNX* path via the proprietary VitisAI EP — the one path that legally touches Phoenix).
 - `dkuku.github.io` — "Machine Learning on Ryzen 7840HS" (the iGPU ROCm fallback in practice).
+
+## 7. Embeddings / CNNs / transformers on XDNA 1 - a different (more positive) story
+
+The verdict in sec 1-5 applies to **LLM runtimes** (FastFlowLM, Lemonade), whose precompiled
+overlays are LLM-kernel-specific and Strix-only. Smaller models - BERT/MiniLM/E5/GTE-class
+embeddings (~25-335M params), ResNet/YOLO vision - are a different matter: they use AMD's
+**VitisAI Execution Provider** stack, not FastFlowLM, and that stack genuinely targets Phoenix.
+
+Verified on the same Ryzen 7 7840HS:
+
+- The public AMD pip index (`pypi.amd.com/ryzenai_llm/1.7.1/linux/simple/`) ships, with **no
+  account gate**: `onnxruntime-vitisai`, `voe`, `ryzenai-dynamic-dispatch`, `ryzenai-onnx-utils`.
+- The `voe` compiler code branches explicitly on `device in ["phx", "stx"]`
+  (`fuse_MATMULINTEGER.py`, `fuse_GMATMULINTEGER.py`), and `op_fusion.py` selects the `4x4`
+  design param - `4x4` being the Phoenix/Hawk-Point partition per AMD's own release notes.
+- `ryzenai-dynamic-dispatch` ships both `xaie2p` (Strix/XDNA2) and `aieml`/`xaie`
+  (AIE-ML = Phoenix/XDNA1) engine headers, with embedded `4x4` (Phoenix) kernels.
+- **Proven:** instantiating `VitisAIExecutionProvider` against the live NPU returns
+  `providers: ['VitisAIExecutionProvider', 'CPUExecutionProvider']` - the EP **initializes on
+  XDNA 1**. (Reproduce with `xdna-npu embed-check`.)
+
+The **one** remaining gate is *model compilation*. The publicly-installable Linux wheels are a
+**deployment-only** build: they *run* a pre-compiled model but emit
+`Model compilation is not supported in a deployment only installation` if asked to compile an
+ONNX graph to the NPU at runtime. The full compiler ships only in AMD's account-gated Ryzen AI
+Software installer. So:
+
+- A **pre-compiled Phoenix embedding model would run today** - but none ships publicly yet
+  (the lone HF embedding model, `amd/NPU-Nomic-embed-text-v1.5-ryzen-strix-cpp`, is Strix/XDNA2-only).
+  Publishing a PHX-compiled embedding model is an obvious, high-value next step.
+- **Compiling your own** embedding ONNX to the NPU needs the gated installer.
+
+Bottom line: for embeddings/CNNs on XDNA 1, the runtime supports Phoenix and the overlay wall
+from sec 1-5 does **not** apply - only the compiler-gate does. For LLMs, the runtime itself does
+not support Phoenix.
